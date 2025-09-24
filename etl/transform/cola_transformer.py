@@ -1,11 +1,14 @@
 # 外部庫
 from pandas import DataFrame
+import pandas as pd
 import time
+import math
+from datetime import datetime
+from typing import Optional
 
 # 本地庫
 from etl.transform.base_transformer import BaseTransformer
 from scripts.unify_csv import (
-    to_date_yyyy_slash_mm_slash_dd,
     split_luggage,
 )
 
@@ -45,6 +48,43 @@ class ColaTransformer(BaseTransformer):
         df = self._ensure_required_columns(df)
         df = self._ensure_metadata(df)
         return df
+
+    def to_date_yyyy_slash_mm_slash_dd(self, value: Optional[str]) -> str:
+        """
+        簡單描述
+        將日期或日期時間字串轉換為 YYYY/MM/DD 格式。
+
+        參數：
+        - value：日期或日期時間字串，如 "2025-11-05 19:20:00"、"2025/11/05"。
+
+        返回：
+        - str："YYYY/MM/DD" 字串；若無法解析則回傳空字串。
+
+        範例：
+        - 輸入："2025-11-05 19:20:00" → 輸出："2025/11/05"
+        - 輸入："2025/11/05" → 輸出："2025/11/05"
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return ""
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+            try:
+                dt = datetime.strptime(value, fmt)
+                return dt.strftime("%Y/%m/%d")
+            except Exception:
+                pass
+        # Try to parse ISO-like with pandas as fallback
+        try:
+            dt = pd.to_datetime(value, errors="coerce")
+            if pd.notna(dt):
+                return dt.strftime("%Y/%m/%d")
+        except Exception:
+            pass
+        return ""
 
     def _rename_columns_to_standard(self, df: DataFrame) -> DataFrame:
         """
@@ -133,7 +173,7 @@ class ColaTransformer(BaseTransformer):
         由第一段去回程起飛時間推導日期（MM/DD）與年份。
 
         作法：
-        - 以 `unify_csv.to_date_yyyy_slash_mm_slash_dd` 解析 `去程_出發時間1` 與 `回程_出發時間1`，
+        - 以內部 `to_date_yyyy_slash_mm_slash_dd` 方法解析 `去程_出發時間1` 與 `回程_出發時間1`，
           寫入 `出發日期` 與 `返回日期` 欄位，並設定 `出發年份` 與 `返回年份` 欄位。
 
         參數：
@@ -148,11 +188,11 @@ class ColaTransformer(BaseTransformer):
         dep_src = df['去程_出發時間1'] if '去程_出發時間1' in df.columns else None
         ret_src = df['回程_出發時間1'] if '回程_出發時間1' in df.columns else None
         if dep_src is not None:
-            df['出發日期'] = dep_src.apply(to_date_yyyy_slash_mm_slash_dd)
+            df['出發日期'] = dep_src.apply(self.to_date_yyyy_slash_mm_slash_dd)
             df['出發年份'] = dep_src.apply(lambda x: x.split('-')[0])
             df['出發日期'] = df['出發日期'].str.slice(5,10).str.replace('-', '/')
         if ret_src is not None:
-            df['返回日期'] = ret_src.apply(to_date_yyyy_slash_mm_slash_dd)
+            df['返回日期'] = ret_src.apply(self.to_date_yyyy_slash_mm_slash_dd)
             df['返回年份'] = ret_src.apply(lambda x: x.split('-')[0])
             df['返回日期'] = df['返回日期'].str.slice(5,10).str.replace('-', '/')
         return df
