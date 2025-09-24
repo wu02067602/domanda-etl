@@ -1,13 +1,14 @@
 # 外部庫
 from pandas import DataFrame
+import pandas as pd
 import time
+import math
+import re
+from datetime import datetime
+from typing import Optional, Tuple
 
 # 本地庫
 from etl.transform.base_transformer import BaseTransformer
-from scripts.unify_csv import (
-    to_date_yyyy_slash_mm_slash_dd,
-    split_luggage,
-)
 
 
 class ColaTransformer(BaseTransformer):
@@ -22,7 +23,7 @@ class ColaTransformer(BaseTransformer):
 
     注意：
     - 僅針對 Cola 做清洗更動；其他來源不受影響。
-    - 行李欄位以 `unify_csv.split_luggage` 規整為無多餘空白、單位標準化（件 / 公斤）的字串，例如："1件"、"25公斤"。
+    - 行李欄位以內部 `split_luggage` 方法規整為無多餘空白、單位標準化（件 / 公斤）的字串，例如："1件"、"25公斤"。
     """
 
     def clean_data(self, df: DataFrame) -> DataFrame:
@@ -45,6 +46,77 @@ class ColaTransformer(BaseTransformer):
         df = self._ensure_required_columns(df)
         df = self._ensure_metadata(df)
         return df
+
+    def to_date_yyyy_slash_mm_slash_dd(self, value: Optional[str]) -> str:
+        """
+        簡單描述
+        將日期或日期時間字串轉換為 YYYY/MM/DD 格式。
+
+        參數：
+        - value：日期或日期時間字串，如 "2025-11-05 19:20:00"、"2025/11/05"。
+
+        返回：
+        - str："YYYY/MM/DD" 字串；若無法解析則回傳空字串。
+
+        範例：
+        - 輸入："2025-11-05 19:20:00" → 輸出："2025/11/05"
+        - 輸入："2025/11/05" → 輸出："2025/11/05"
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return ""
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+            try:
+                dt = datetime.strptime(value, fmt)
+                return dt.strftime("%Y/%m/%d")
+            except Exception:
+                pass
+        # Try to parse ISO-like with pandas as fallback
+        try:
+            dt = pd.to_datetime(value, errors="coerce")
+            if pd.notna(dt):
+                return dt.strftime("%Y/%m/%d")
+        except Exception:
+            pass
+        return ""
+
+    def split_luggage(self, value: Optional[str]) -> Tuple[Optional[float], str]:
+        """
+        簡單描述
+        解析行李欄位為（數值, 單位）。將單位正規化為「件」或「公斤」。
+
+        參數：
+        - value：行李描述，如 "1件"、"25 公斤"、"2 件"。
+
+        返回：
+        - Tuple[Optional[float], str]：數值（float 或 None）與單位（"件"/"公斤"/空字串）。
+
+        範例：
+        - 輸入："1件" → 輸出：(1.0, "件")
+        - 輸入："25 公斤" → 輸出：(25.0, "公斤")
+        - 輸入："無" → 輸出：(None, "")
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None, ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return None, ""
+        # Examples: "1件", "25公斤", "30 公斤", "2 件"
+        num_match = re.search(r"(\d+(?:\.\d+)?)", value)
+        unit = re.sub(r"[\d\s\.]+", "", value)
+        number = float(num_match.group(1)) if num_match else None
+        # Normalize units to exactly hk4g4 uses: 件 / 公斤
+        if "件" in unit:
+            unit = "件"
+        elif any(u in unit for u in ["公斤", "kg", "KG", "Kg"]):
+            unit = "公斤"
+        return number, unit
 
     def _rename_columns_to_standard(self, df: DataFrame) -> DataFrame:
         """
@@ -133,7 +205,7 @@ class ColaTransformer(BaseTransformer):
         由第一段去回程起飛時間推導日期（MM/DD）與年份。
 
         作法：
-        - 以 `unify_csv.to_date_yyyy_slash_mm_slash_dd` 解析 `去程_出發時間1` 與 `回程_出發時間1`，
+        - 以內部 `to_date_yyyy_slash_mm_slash_dd` 方法解析 `去程_出發時間1` 與 `回程_出發時間1`，
           寫入 `出發日期` 與 `返回日期` 欄位，並設定 `出發年份` 與 `返回年份` 欄位。
 
         參數：
@@ -148,11 +220,11 @@ class ColaTransformer(BaseTransformer):
         dep_src = df['去程_出發時間1'] if '去程_出發時間1' in df.columns else None
         ret_src = df['回程_出發時間1'] if '回程_出發時間1' in df.columns else None
         if dep_src is not None:
-            df['出發日期'] = dep_src.apply(to_date_yyyy_slash_mm_slash_dd)
+            df['出發日期'] = dep_src.apply(self.to_date_yyyy_slash_mm_slash_dd)
             df['出發年份'] = dep_src.apply(lambda x: x.split('-')[0])
             df['出發日期'] = df['出發日期'].str.slice(5,10).str.replace('-', '/')
         if ret_src is not None:
-            df['返回日期'] = ret_src.apply(to_date_yyyy_slash_mm_slash_dd)
+            df['返回日期'] = ret_src.apply(self.to_date_yyyy_slash_mm_slash_dd)
             df['返回年份'] = ret_src.apply(lambda x: x.split('-')[0])
             df['返回日期'] = df['返回日期'].str.slice(5,10).str.replace('-', '/')
         return df
@@ -177,7 +249,7 @@ class ColaTransformer(BaseTransformer):
         規整行李欄位字串：將數值與單位正規化並組回簡潔表示。
 
         作法：
-        - 使用 `unify_csv.split_luggage` 解析每一個 `*行李{n}` 欄位的值為（數值, 單位）。
+        - 使用內部 `split_luggage` 方法解析每一個 `*行李{n}` 欄位的值為（數值, 單位）。
         - 若可解析到數值，重寫為「<數值><單位>」（例如："1件"、"25公斤"），否則設為空字串。
 
         參數：
@@ -192,7 +264,7 @@ class ColaTransformer(BaseTransformer):
                 # 若整欄皆為空，跳過處理
                 if series.isnull().all():
                     continue
-                parsed = series.apply(lambda x: split_luggage(x))
+                parsed = series.apply(lambda x: self.split_luggage(x))
                 df[col] = parsed.apply(lambda t: (f"{int(t[0]) if t[0] is not None and float(t[0]).is_integer() else t[0]}{t[1]}" if t[0] is not None and t[1] else (f"{t[0]}" if t[0] is not None else '')))
         return df
 

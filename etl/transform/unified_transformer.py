@@ -1,16 +1,150 @@
 import pandas as pd
 from pandas import DataFrame
 import numpy as np
-from scripts.unify_csv import (
-    extract_airline_code,
-    to_time_hhmm,
-    duration_to_minutes,
-    split_luggage,
-)
+import re
+import math
+from datetime import datetime
+from typing import Optional, Tuple
 class UnifiedTransformer:
     """
     UnifiedTransformer 類負責整合來自各個 Transformer 的清洗結果，並進行最後的欄位對齊、join 價格稅金等。
     """
+    
+    def extract_airline_code(self, flight_number: Optional[str]) -> str:
+        """
+        簡單描述
+        從航班編號字串擷取航空公司兩到三碼（前綴英文字母）。
+
+        參數：
+        - flight_number：航班編號，如 "HX261"、"CI073"。
+
+        返回：
+        - str：航空公司代碼（大寫），若無法解析則回傳空字串。
+
+        範例：
+        - 輸入："HX261" → 輸出："HX"
+        - 輸入：None → 輸出：""
+        """
+        if not isinstance(flight_number, str) or not flight_number:
+            return ""
+        m = re.match(r"([A-Za-z]+)", flight_number)
+        return m.group(1).upper() if m else ""
+
+    def to_time_hhmm(self, value: Optional[str]) -> str:
+        """
+        簡單描述
+        將時間字串正規化為 HH:MM（24 小時制）。支援完整日期時間（YYYY-MM-DD HH:MM:SS）、YYYY/MM/DD HH:MM、HH:MM，以及內文帶有 HH:MM 的情況。
+
+        參數：
+        - value：時間字串，如 "2025-11-05 19:20:00" 或 "19:20"。
+
+        返回：
+        - str：正規化後的 "HH:MM"；若無法解析則回傳空字串。
+
+        範例：
+        - 輸入："2025-11-05 19:20:00" → 輸出："19:20"
+        - 輸入："0 days 19:20:00" → 輸出："19:20"
+        - 輸入："19:05" → 輸出："19:05"
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return ""
+        # Try full datetime
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M"):
+            try:
+                dt = datetime.strptime(value, fmt)
+                return dt.strftime("%H:%M")
+            except Exception:
+                pass
+        # Already HH:MM
+        m = re.match(r"^(\d{1,2}):(\d{2})$", value)
+        if m:
+            hh = int(m.group(1))
+            mm = int(m.group(2))
+            return f"{hh:02d}:{mm:02d}"
+        # Other formats -> best effort: keep tail HH:MM if found
+        m = re.search(r"(\d{1,2}:\d{2})", value)
+        if m:
+            hh, mm = m.group(1).split(":")
+            return f"{int(hh):02d}:{int(mm):02d}"
+        return ""
+
+    def duration_to_minutes(self, value: Optional[str]) -> Optional[int]:
+        """
+        簡單描述
+        將飛行時間字串轉為總分鐘數。支援格式如 "0 days 02:05:00"、"02:05:00"，或純數字（視為分鐘）。
+
+        參數：
+        - value：持續時間字串或數值。
+
+        返回：
+        - Optional[int]：總分鐘數；若無法解析則回傳 None。
+
+        範例：
+        - 輸入："0 days 02:05:00" → 輸出：125
+        - 輸入："01:30:30" → 輸出：91（四捨五入秒數）
+        - 輸入："95" → 輸出：95
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return None
+        # Patterns like "0 days 02:05:00" or "02:05:00"
+        m = re.search(r"(?:(\d+)\s*days\s*)?(\d{1,2}):(\d{2})(?::(\d{2}))?", value)
+        if m:
+            days = int(m.group(1)) if m.group(1) else 0
+            hours = int(m.group(2))
+            minutes = int(m.group(3))
+            seconds = int(m.group(4)) if m.group(4) else 0
+            total = days * 24 * 60 + hours * 60 + minutes + (1 if seconds >= 30 else 0)
+            return total
+        # Fallback: numbers-only assume minutes
+        if re.match(r"^\d+$", value):
+            return int(value)
+        return None
+
+    def split_luggage(self, value: Optional[str]) -> Tuple[Optional[float], str]:
+        """
+        簡單描述
+        解析行李欄位為（數值, 單位）。將單位正規化為「件」或「公斤」。
+
+        參數：
+        - value：行李描述，如 "1件"、"25 公斤"、"2 件"。
+
+        返回：
+        - Tuple[Optional[float], str]：數值（float 或 None）與單位（"件"/"公斤"/空字串）。
+
+        範例：
+        - 輸入："1件" → 輸出：(1.0, "件")
+        - 輸入："25 公斤" → 輸出：(25.0, "公斤")
+        - 輸入："無" → 輸出：(None, "")
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None, ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return None, ""
+        # Examples: "1件", "25公斤", "30 公斤", "2 件"
+        num_match = re.search(r"(\d+(?:\.\d+)?)", value)
+        unit = re.sub(r"[\d\s\.]+", "", value)
+        number = float(num_match.group(1)) if num_match else None
+        # Normalize units to exactly hk4g4 uses: 件 / 公斤
+        if "件" in unit:
+            unit = "件"
+        elif any(u in unit for u in ["公斤", "kg", "KG", "Kg"]):
+            unit = "公斤"
+        return number, unit
 
     def unify_data(self, cola_df: DataFrame, set_df: DataFrame, lion_df: DataFrame ,eztravel_df: DataFrame, foreign_supplier_eztravel_df: DataFrame, rich_df: DataFrame) -> DataFrame:
         """
@@ -171,10 +305,10 @@ class UnifiedTransformer:
             dep_fn_col = f'去程_航班編號{i}'
             ret_fn_col = f'回程_航班編號{i}'
             new_df[f'departure_airline_{i}'] = (
-                df[dep_fn_col].apply(extract_airline_code) if dep_fn_col in df.columns else None
+                df[dep_fn_col].apply(self.extract_airline_code) if dep_fn_col in df.columns else None
             )
             new_df[f'return_airline_{i}'] = (
-                df[ret_fn_col].apply(extract_airline_code) if ret_fn_col in df.columns else None
+                df[ret_fn_col].apply(self.extract_airline_code) if ret_fn_col in df.columns else None
             )
         
         # 機場代碼轉換
@@ -203,20 +337,20 @@ class UnifiedTransformer:
             else:
                 new_df[f'return_arrival_airport_{i}'] = None
         
-        # 時間轉換：使用 unify_csv.to_time_hhmm
+        # 時間轉換：使用內部 to_time_hhmm 方法
         for i in range(1, 4):
             # 去程/回程出發與到達時間
             new_df[f'departure_flight_time_{i}'] = (
-                df[f'去程_出發時間{i}'].apply(to_time_hhmm) if f'去程_出發時間{i}' in df.columns else None
+                df[f'去程_出發時間{i}'].apply(self.to_time_hhmm) if f'去程_出發時間{i}' in df.columns else None
             )
             new_df[f'departure_arrival_flight_time_{i}'] = (
-                df[f'去程_到達時間{i}'].apply(to_time_hhmm) if f'去程_到達時間{i}' in df.columns else None
+                df[f'去程_到達時間{i}'].apply(self.to_time_hhmm) if f'去程_到達時間{i}' in df.columns else None
             )
             new_df[f'return_flight_time_{i}'] = (
-                df[f'回程_出發時間{i}'].apply(to_time_hhmm) if f'回程_出發時間{i}' in df.columns else None
+                df[f'回程_出發時間{i}'].apply(self.to_time_hhmm) if f'回程_出發時間{i}' in df.columns else None
             )
             new_df[f'return_arrival_flight_time_{i}'] = (
-                df[f'回程_到達時間{i}'].apply(to_time_hhmm) if f'回程_到達時間{i}' in df.columns else None
+                df[f'回程_到達時間{i}'].apply(self.to_time_hhmm) if f'回程_到達時間{i}' in df.columns else None
             )
         
         # 機型轉換
@@ -233,32 +367,32 @@ class UnifiedTransformer:
             else:
                 new_df[f'return_aircraft_type_{i}'] = None
     
-        # 行李：使用 unify_csv.split_luggage 拆為數值與單位
+        # 行李：使用內部 split_luggage 方法拆為數值與單位
         for i in range(1, 4):
             dep_col = f'去程行李{i}'
             ret_col = f'回程行李{i}'
             if dep_col in df.columns:
-                parsed = df[dep_col].apply(split_luggage)
+                parsed = df[dep_col].apply(self.split_luggage)
                 new_df[f'departure_luggage_value_{i}'] = parsed.apply(lambda t: t[0] if t and len(t) > 0 else None)
                 new_df[f'departure_luggage_unit_{i}'] = parsed.apply(lambda t: t[1] if t and len(t) > 1 else None)
             else:
                 new_df[f'departure_luggage_value_{i}'] = None
                 new_df[f'departure_luggage_unit_{i}'] = None
             if ret_col in df.columns:
-                parsed = df[ret_col].apply(split_luggage)
+                parsed = df[ret_col].apply(self.split_luggage)
                 new_df[f'return_luggage_value_{i}'] = parsed.apply(lambda t: t[0] if t and len(t) > 0 else None)
                 new_df[f'return_luggage_unit_{i}'] = parsed.apply(lambda t: t[1] if t and len(t) > 1 else None)
             else:
                 new_df[f'return_luggage_value_{i}'] = None
                 new_df[f'return_luggage_unit_{i}'] = None
 
-        # 飛行時間：使用 unify_csv.duration_to_minutes
+        # 飛行時間：使用內部 duration_to_minutes 方法
         for i in range(1, 4):
             new_df[f'departure_flight_duration_{i}'] = (
-                df[f'去程_飛行時間{i}'].apply(duration_to_minutes) if f'去程_飛行時間{i}' in df.columns else None
+                df[f'去程_飛行時間{i}'].apply(self.duration_to_minutes) if f'去程_飛行時間{i}' in df.columns else None
             )
             new_df[f'return_flight_duration_{i}'] = (
-                df[f'回程_飛行時間{i}'].apply(duration_to_minutes) if f'回程_飛行時間{i}' in df.columns else None
+                df[f'回程_飛行時間{i}'].apply(self.duration_to_minutes) if f'回程_飛行時間{i}' in df.columns else None
             )
         
         # 航班編號轉換
