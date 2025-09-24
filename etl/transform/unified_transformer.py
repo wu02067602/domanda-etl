@@ -6,7 +6,6 @@ import math
 from datetime import datetime
 from typing import Optional
 from scripts.unify_csv import (
-    duration_to_minutes,
     split_luggage,
 )
 class UnifiedTransformer:
@@ -76,6 +75,45 @@ class UnifiedTransformer:
             hh, mm = m.group(1).split(":")
             return f"{int(hh):02d}:{int(mm):02d}"
         return ""
+
+    def duration_to_minutes(self, value: Optional[str]) -> Optional[int]:
+        """
+        簡單描述
+        將飛行時間字串轉為總分鐘數。支援格式如 "0 days 02:05:00"、"02:05:00"，或純數字（視為分鐘）。
+
+        參數：
+        - value：持續時間字串或數值。
+
+        返回：
+        - Optional[int]：總分鐘數；若無法解析則回傳 None。
+
+        範例：
+        - 輸入："0 days 02:05:00" → 輸出：125
+        - 輸入："01:30:30" → 輸出：91（四捨五入秒數）
+        - 輸入："95" → 輸出：95
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return None
+        # Patterns like "0 days 02:05:00" or "02:05:00"
+        m = re.search(r"(?:(\d+)\s*days\s*)?(\d{1,2}):(\d{2})(?::(\d{2}))?", value)
+        if m:
+            days = int(m.group(1)) if m.group(1) else 0
+            hours = int(m.group(2))
+            minutes = int(m.group(3))
+            seconds = int(m.group(4)) if m.group(4) else 0
+            total = days * 24 * 60 + hours * 60 + minutes + (1 if seconds >= 30 else 0)
+            return total
+        # Fallback: numbers-only assume minutes
+        if re.match(r"^\d+$", value):
+            return int(value)
+        return None
 
     def unify_data(self, cola_df: DataFrame, set_df: DataFrame, lion_df: DataFrame ,eztravel_df: DataFrame, foreign_supplier_eztravel_df: DataFrame, rich_df: DataFrame) -> DataFrame:
         """
@@ -317,13 +355,13 @@ class UnifiedTransformer:
                 new_df[f'return_luggage_value_{i}'] = None
                 new_df[f'return_luggage_unit_{i}'] = None
 
-        # 飛行時間：使用 unify_csv.duration_to_minutes
+        # 飛行時間：使用內部 duration_to_minutes 方法
         for i in range(1, 4):
             new_df[f'departure_flight_duration_{i}'] = (
-                df[f'去程_飛行時間{i}'].apply(duration_to_minutes) if f'去程_飛行時間{i}' in df.columns else None
+                df[f'去程_飛行時間{i}'].apply(self.duration_to_minutes) if f'去程_飛行時間{i}' in df.columns else None
             )
             new_df[f'return_flight_duration_{i}'] = (
-                df[f'回程_飛行時間{i}'].apply(duration_to_minutes) if f'回程_飛行時間{i}' in df.columns else None
+                df[f'回程_飛行時間{i}'].apply(self.duration_to_minutes) if f'回程_飛行時間{i}' in df.columns else None
             )
         
         # 航班編號轉換
