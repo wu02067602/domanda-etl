@@ -1,0 +1,63 @@
+substitutions:
+  _CI_REGISTRY_IMAGE: '${_CI_REGISTRY_IMAGE}'
+  _CI_REGISTRY_IMAGE_NAME: '${_CI_REGISTRY_IMAGE_NAME}'
+  _CONTAINERNAME: '${_CONTAINERNAME}'
+  _ZONE: '${_ZONE}'
+  _NODE_ENV: '${_NODE_ENV}'
+  _SERVICE_ACCOUNT: '${_SERVICE_ACCOUNT}'
+  _INSTANCE_CONNECTION_NAME: '${_INSTANCE_CONNECTION_NAME}'
+  _IS_CLOUD: '${_IS_CLOUD}'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+# 檢查 Cloud Build 環境變數
+- name: 'gcr.io/cloud-builders/gcloud'
+  entrypoint: 'sh'
+  args:
+  - '-c'
+  - |
+    BUILD_ID=$(curl -s -H "Metadata-Flavor: Google" http://metadata/computeMetadata/v1/instance/attributes/build-id)
+    echo "BUILD_ID: $BUILD_ID"
+
+# 建立 Docker 映像
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['build', '--build-arg', 'NODE_ENV=${_NODE_ENV}', '-t', '${_CI_REGISTRY_IMAGE}/${PROJECT_ID}/${_CI_REGISTRY_IMAGE_NAME}/${_CONTAINERNAME}:${COMMIT_SHA}', '.']
+
+# 推送 Docker 映像到 Artifact Registry
+- name: 'gcr.io/cloud-builders/docker'
+  args: ['push', '${_CI_REGISTRY_IMAGE}/${PROJECT_ID}/${_CI_REGISTRY_IMAGE_NAME}/${_CONTAINERNAME}:${COMMIT_SHA}']
+
+# 檢查 Cloud Run Job 是否存在並創建或更新
+- name: 'gcr.io/cloud-builders/gcloud'
+  entrypoint: 'sh'
+  args:
+    - '-c'
+    - |
+      gcloud beta run jobs deploy ${_NODE_ENV}-${_CONTAINERNAME}-job \
+        --image ${_CI_REGISTRY_IMAGE}/${PROJECT_ID}/${_CI_REGISTRY_IMAGE_NAME}/${_CONTAINERNAME}:${COMMIT_SHA} \
+        --region ${_ZONE} \
+        --task-timeout 1800s \
+        --memory 2Gi \
+        --cpu 2 \
+        --service-account ${_SERVICE_ACCOUNT} \
+        --set-cloudsql-instances=${_INSTANCE_CONNECTION_NAME} \
+        --network=testing-cola-rd-vpc \
+        --subnet=testing-cola-rd-vpc-subnet \
+        --vpc-egress=all-traffic \
+        --set-env-vars="CI_REGISTRY_IMAGE=${_CI_REGISTRY_IMAGE},CI_REGISTRY_IMAGE_NAME=${_CI_REGISTRY_IMAGE_NAME},CONTAINERNAME=${_CONTAINERNAME},ZONE=${_ZONE},NODE_ENV=${_NODE_ENV},SERVICE_ACCOUNT=${_SERVICE_ACCOUNT},INSTANCE_CONNECTION_NAME=${_INSTANCE_CONNECTION_NAME},IS_CLOUD=${_IS_CLOUD}"
+
+# 執行 Cloud Run Job
+- name: 'gcr.io/cloud-builders/gcloud'
+  id: 'run-job'
+  args:
+  - 'beta'
+  - 'run'
+  - 'jobs'
+  - 'execute'
+  - '${_NODE_ENV}-${_CONTAINERNAME}-job'
+  - '--region'
+  - '${_ZONE}'
+  allowFailure: true
+  

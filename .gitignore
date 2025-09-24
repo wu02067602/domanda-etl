@@ -1,0 +1,7 @@
+.venv/
+.vscode/
+.pytest_cache/
+__pycache__
+test.py
+data.pkl
+key-dev-domanda-etl-data-test.json
