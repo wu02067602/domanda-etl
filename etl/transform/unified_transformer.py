@@ -4,10 +4,7 @@ import numpy as np
 import re
 import math
 from datetime import datetime
-from typing import Optional
-from scripts.unify_csv import (
-    split_luggage,
-)
+from typing import Optional, Tuple
 class UnifiedTransformer:
     """
     UnifiedTransformer 類負責整合來自各個 Transformer 的清洗結果，並進行最後的欄位對齊、join 價格稅金等。
@@ -114,6 +111,40 @@ class UnifiedTransformer:
         if re.match(r"^\d+$", value):
             return int(value)
         return None
+
+    def split_luggage(self, value: Optional[str]) -> Tuple[Optional[float], str]:
+        """
+        簡單描述
+        解析行李欄位為（數值, 單位）。將單位正規化為「件」或「公斤」。
+
+        參數：
+        - value：行李描述，如 "1件"、"25 公斤"、"2 件"。
+
+        返回：
+        - Tuple[Optional[float], str]：數值（float 或 None）與單位（"件"/"公斤"/空字串）。
+
+        範例：
+        - 輸入："1件" → 輸出：(1.0, "件")
+        - 輸入："25 公斤" → 輸出：(25.0, "公斤")
+        - 輸入："無" → 輸出：(None, "")
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None, ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return None, ""
+        # Examples: "1件", "25公斤", "30 公斤", "2 件"
+        num_match = re.search(r"(\d+(?:\.\d+)?)", value)
+        unit = re.sub(r"[\d\s\.]+", "", value)
+        number = float(num_match.group(1)) if num_match else None
+        # Normalize units to exactly hk4g4 uses: 件 / 公斤
+        if "件" in unit:
+            unit = "件"
+        elif any(u in unit for u in ["公斤", "kg", "KG", "Kg"]):
+            unit = "公斤"
+        return number, unit
 
     def unify_data(self, cola_df: DataFrame, set_df: DataFrame, lion_df: DataFrame ,eztravel_df: DataFrame, foreign_supplier_eztravel_df: DataFrame, rich_df: DataFrame) -> DataFrame:
         """
@@ -336,19 +367,19 @@ class UnifiedTransformer:
             else:
                 new_df[f'return_aircraft_type_{i}'] = None
     
-        # 行李：使用 unify_csv.split_luggage 拆為數值與單位
+        # 行李：使用內部 split_luggage 方法拆為數值與單位
         for i in range(1, 4):
             dep_col = f'去程行李{i}'
             ret_col = f'回程行李{i}'
             if dep_col in df.columns:
-                parsed = df[dep_col].apply(split_luggage)
+                parsed = df[dep_col].apply(self.split_luggage)
                 new_df[f'departure_luggage_value_{i}'] = parsed.apply(lambda t: t[0] if t and len(t) > 0 else None)
                 new_df[f'departure_luggage_unit_{i}'] = parsed.apply(lambda t: t[1] if t and len(t) > 1 else None)
             else:
                 new_df[f'departure_luggage_value_{i}'] = None
                 new_df[f'departure_luggage_unit_{i}'] = None
             if ret_col in df.columns:
-                parsed = df[ret_col].apply(split_luggage)
+                parsed = df[ret_col].apply(self.split_luggage)
                 new_df[f'return_luggage_value_{i}'] = parsed.apply(lambda t: t[0] if t and len(t) > 0 else None)
                 new_df[f'return_luggage_unit_{i}'] = parsed.apply(lambda t: t[1] if t and len(t) > 1 else None)
             else:

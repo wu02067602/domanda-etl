@@ -3,14 +3,12 @@ from pandas import DataFrame
 import pandas as pd
 import time
 import math
+import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 
 # 本地庫
 from etl.transform.base_transformer import BaseTransformer
-from scripts.unify_csv import (
-    split_luggage,
-)
 
 
 class ColaTransformer(BaseTransformer):
@@ -25,7 +23,7 @@ class ColaTransformer(BaseTransformer):
 
     注意：
     - 僅針對 Cola 做清洗更動；其他來源不受影響。
-    - 行李欄位以 `unify_csv.split_luggage` 規整為無多餘空白、單位標準化（件 / 公斤）的字串，例如："1件"、"25公斤"。
+    - 行李欄位以內部 `split_luggage` 方法規整為無多餘空白、單位標準化（件 / 公斤）的字串，例如："1件"、"25公斤"。
     """
 
     def clean_data(self, df: DataFrame) -> DataFrame:
@@ -85,6 +83,40 @@ class ColaTransformer(BaseTransformer):
         except Exception:
             pass
         return ""
+
+    def split_luggage(self, value: Optional[str]) -> Tuple[Optional[float], str]:
+        """
+        簡單描述
+        解析行李欄位為（數值, 單位）。將單位正規化為「件」或「公斤」。
+
+        參數：
+        - value：行李描述，如 "1件"、"25 公斤"、"2 件"。
+
+        返回：
+        - Tuple[Optional[float], str]：數值（float 或 None）與單位（"件"/"公斤"/空字串）。
+
+        範例：
+        - 輸入："1件" → 輸出：(1.0, "件")
+        - 輸入："25 公斤" → 輸出：(25.0, "公斤")
+        - 輸入："無" → 輸出：(None, "")
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return None, ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return None, ""
+        # Examples: "1件", "25公斤", "30 公斤", "2 件"
+        num_match = re.search(r"(\d+(?:\.\d+)?)", value)
+        unit = re.sub(r"[\d\s\.]+", "", value)
+        number = float(num_match.group(1)) if num_match else None
+        # Normalize units to exactly hk4g4 uses: 件 / 公斤
+        if "件" in unit:
+            unit = "件"
+        elif any(u in unit for u in ["公斤", "kg", "KG", "Kg"]):
+            unit = "公斤"
+        return number, unit
 
     def _rename_columns_to_standard(self, df: DataFrame) -> DataFrame:
         """
@@ -217,7 +249,7 @@ class ColaTransformer(BaseTransformer):
         規整行李欄位字串：將數值與單位正規化並組回簡潔表示。
 
         作法：
-        - 使用 `unify_csv.split_luggage` 解析每一個 `*行李{n}` 欄位的值為（數值, 單位）。
+        - 使用內部 `split_luggage` 方法解析每一個 `*行李{n}` 欄位的值為（數值, 單位）。
         - 若可解析到數值，重寫為「<數值><單位>」（例如："1件"、"25公斤"），否則設為空字串。
 
         參數：
@@ -232,7 +264,7 @@ class ColaTransformer(BaseTransformer):
                 # 若整欄皆為空，跳過處理
                 if series.isnull().all():
                     continue
-                parsed = series.apply(lambda x: split_luggage(x))
+                parsed = series.apply(lambda x: self.split_luggage(x))
                 df[col] = parsed.apply(lambda t: (f"{int(t[0]) if t[0] is not None and float(t[0]).is_integer() else t[0]}{t[1]}" if t[0] is not None and t[1] else (f"{t[0]}" if t[0] is not None else '')))
         return df
 
