@@ -1,8 +1,11 @@
 import pandas as pd
 from pandas import DataFrame
 import numpy as np
+import re
+import math
+from datetime import datetime
+from typing import Optional, Tuple
 from scripts.unify_csv import (
-    extract_airline_code,
     to_time_hhmm,
     duration_to_minutes,
     split_luggage,
@@ -11,6 +14,26 @@ class UnifiedTransformer:
     """
     UnifiedTransformer 類負責整合來自各個 Transformer 的清洗結果，並進行最後的欄位對齊、join 價格稅金等。
     """
+
+    def extract_airline_code(self, flight_number: Optional[str]) -> str:
+        """
+        簡單描述
+        從航班編號字串擷取航空公司兩到三碼（前綴英文字母）。
+
+        參數：
+        - flight_number：航班編號，如 "HX261"、"CI073"。
+
+        返回：
+        - str：航空公司代碼（大寫），若無法解析則回傳空字串。
+
+        範例：
+        - 輸入："HX261" → 輸出："HX"
+        - 輸入：None → 輸出：""
+        """
+        if not isinstance(flight_number, str) or not flight_number:
+            return ""
+        m = re.match(r"([A-Za-z]+)", flight_number)
+        return m.group(1).upper() if m else ""
 
     def unify_data(self, cola_df: DataFrame, set_df: DataFrame, lion_df: DataFrame ,eztravel_df: DataFrame, foreign_supplier_eztravel_df: DataFrame, rich_df: DataFrame) -> DataFrame:
         """
@@ -171,10 +194,10 @@ class UnifiedTransformer:
             dep_fn_col = f'去程_航班編號{i}'
             ret_fn_col = f'回程_航班編號{i}'
             new_df[f'departure_airline_{i}'] = (
-                df[dep_fn_col].apply(extract_airline_code) if dep_fn_col in df.columns else None
+                df[dep_fn_col].apply(self.extract_airline_code) if dep_fn_col in df.columns else None
             )
             new_df[f'return_airline_{i}'] = (
-                df[ret_fn_col].apply(extract_airline_code) if ret_fn_col in df.columns else None
+                df[ret_fn_col].apply(self.extract_airline_code) if ret_fn_col in df.columns else None
             )
         
         # 機場代碼轉換
