@@ -2,9 +2,10 @@ import pandas as pd
 from pandas import DataFrame
 import numpy as np
 import re
+import math
+from datetime import datetime
 from typing import Optional
 from scripts.unify_csv import (
-    to_time_hhmm,
     duration_to_minutes,
     split_luggage,
 )
@@ -32,6 +33,49 @@ class UnifiedTransformer:
             return ""
         m = re.match(r"([A-Za-z]+)", flight_number)
         return m.group(1).upper() if m else ""
+
+    def to_time_hhmm(self, value: Optional[str]) -> str:
+        """
+        簡單描述
+        將時間字串正規化為 HH:MM（24 小時制）。支援完整日期時間（YYYY-MM-DD HH:MM:SS）、YYYY/MM/DD HH:MM、HH:MM，以及內文帶有 HH:MM 的情況。
+
+        參數：
+        - value：時間字串，如 "2025-11-05 19:20:00" 或 "19:20"。
+
+        返回：
+        - str：正規化後的 "HH:MM"；若無法解析則回傳空字串。
+
+        範例：
+        - 輸入："2025-11-05 19:20:00" → 輸出："19:20"
+        - 輸入："0 days 19:20:00" → 輸出："19:20"
+        - 輸入："19:05" → 輸出："19:05"
+        """
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return ""
+        if not isinstance(value, str):
+            value = str(value)
+        value = value.strip()
+        if not value:
+            return ""
+        # Try full datetime
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M"):
+            try:
+                dt = datetime.strptime(value, fmt)
+                return dt.strftime("%H:%M")
+            except Exception:
+                pass
+        # Already HH:MM
+        m = re.match(r"^(\d{1,2}):(\d{2})$", value)
+        if m:
+            hh = int(m.group(1))
+            mm = int(m.group(2))
+            return f"{hh:02d}:{mm:02d}"
+        # Other formats -> best effort: keep tail HH:MM if found
+        m = re.search(r"(\d{1,2}:\d{2})", value)
+        if m:
+            hh, mm = m.group(1).split(":")
+            return f"{int(hh):02d}:{int(mm):02d}"
+        return ""
 
     def unify_data(self, cola_df: DataFrame, set_df: DataFrame, lion_df: DataFrame ,eztravel_df: DataFrame, foreign_supplier_eztravel_df: DataFrame, rich_df: DataFrame) -> DataFrame:
         """
@@ -224,20 +268,20 @@ class UnifiedTransformer:
             else:
                 new_df[f'return_arrival_airport_{i}'] = None
         
-        # 時間轉換：使用 unify_csv.to_time_hhmm
+        # 時間轉換：使用內部 to_time_hhmm 方法
         for i in range(1, 4):
             # 去程/回程出發與到達時間
             new_df[f'departure_flight_time_{i}'] = (
-                df[f'去程_出發時間{i}'].apply(to_time_hhmm) if f'去程_出發時間{i}' in df.columns else None
+                df[f'去程_出發時間{i}'].apply(self.to_time_hhmm) if f'去程_出發時間{i}' in df.columns else None
             )
             new_df[f'departure_arrival_flight_time_{i}'] = (
-                df[f'去程_到達時間{i}'].apply(to_time_hhmm) if f'去程_到達時間{i}' in df.columns else None
+                df[f'去程_到達時間{i}'].apply(self.to_time_hhmm) if f'去程_到達時間{i}' in df.columns else None
             )
             new_df[f'return_flight_time_{i}'] = (
-                df[f'回程_出發時間{i}'].apply(to_time_hhmm) if f'回程_出發時間{i}' in df.columns else None
+                df[f'回程_出發時間{i}'].apply(self.to_time_hhmm) if f'回程_出發時間{i}' in df.columns else None
             )
             new_df[f'return_arrival_flight_time_{i}'] = (
-                df[f'回程_到達時間{i}'].apply(to_time_hhmm) if f'回程_到達時間{i}' in df.columns else None
+                df[f'回程_到達時間{i}'].apply(self.to_time_hhmm) if f'回程_到達時間{i}' in df.columns else None
             )
         
         # 機型轉換
