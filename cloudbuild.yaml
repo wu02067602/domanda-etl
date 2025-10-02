@@ -39,7 +39,7 @@ steps:
         --image ${_CI_REGISTRY_IMAGE}/${PROJECT_ID}/${_CI_REGISTRY_IMAGE_NAME}/${_CONTAINERNAME}:${COMMIT_SHA} \
         --region ${_ZONE} \
         --task-timeout 1800s \
-        --memory 2Gi \
+        --memory 4Gi \
         --cpu 2 \
         --service-account ${_SERVICE_ACCOUNT} \
         --set-cloudsql-instances=${_INSTANCE_CONNECTION_NAME} \
